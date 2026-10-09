@@ -1,0 +1,51 @@
+name: Release
+
+# Pushing a tag like v1.0.0 builds the Windows .exes and publishes them as a GitHub release.
+# Pull requests build them too (as downloadable artifacts) so packaging problems show up before release day.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    permissions:
+      contents: write  # to create the release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pyinstaller==6.22.3
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Build CTP500Printer.exe (GUI, no console window) and ctp500.exe (console, for the CLI)
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name CTP500Printer CTP500_GUI_app_Github_Export.py
+          if ($LASTEXITCODE) { exit 1 }
+          pyinstaller --noconfirm --onefile --console --name ctp500 CTP500_GUI_app_Github_Export.py
+      - name: Smoke test the exes
+        run: |
+          dist\ctp500.exe --help
+          if ($LASTEXITCODE) { exit 1 }
+          dist\ctp500.exe --list-fonts > fonts.txt
+          if ($LASTEXITCODE) { exit 1 }
+          "$((Get-Content fonts.txt).Count) printable fonts found"
+          # Both exes bundle the same code; the console one shows a crash as an early exit, so use it to check the GUI starts
+          $gui = Start-Process dist\ctp500.exe -PassThru
+          Start-Sleep -Seconds 20
+          if ($gui.HasExited) { Write-Error "GUI exited early (exit code $($gui.ExitCode))"; exit 1 }
+          taskkill /PID $gui.Id /T /F
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exes
+          path: dist/*.exe
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/CTP500Printer.exe dist/ctp500.exe --title "${{ github.ref_name }}" --generate-notes
