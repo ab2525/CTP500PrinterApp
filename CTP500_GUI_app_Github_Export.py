@@ -76,6 +76,17 @@ if sys.platform == "darwin": #macOS Python has no AF_BLUETOOTH, so we open the R
             self.channel.closeChannel()
             self.channel.getDevice().closeConnection()
 
+def open_connection(address): #Opens the printer's RFCOMM channel 1, returning something with send/recv/shutdown/close
+    if sys.platform == "darwin":
+        return MacRFCOMMSocket(address)
+    sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM) #Setting up the Bluetooth socket with RFCOMM protocol
+    try:
+        sock.connect((address, 1)) #Connection instruction with address and port to use
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
 class PrinterConnect: #Starting a PrinterConnect class to keep track of connection status
     def __init__(self):
         self.socket = None #Starting a disconnect socket
@@ -87,11 +98,7 @@ class PrinterConnect: #Starting a PrinterConnect class to keep track of connecti
             return True #Switching PrinterConnect socket status
 
         try: #Starting all the things to do to establish a connection
-            if sys.platform == "darwin":
-                self.socket = MacRFCOMMSocket(mac_address)
-            else:
-                self.socket = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM) #Setting up the Bluetooth socket with RFCOMM protocol
-                self.socket.connect((mac_address, 1)) #Connection instruction with address and port to use
+            self.socket = open_connection(mac_address)
 
             print("Getting printer status")
             status = self.get_printer_status() #Calling the get_printer_status() function and storing it in status variable
@@ -441,7 +448,7 @@ def run_cli():
         return 0
 
     font = system_fonts.get(args.font, args.font) #Accepting a font name or a path to a font file
-    if not os.path.isfile(font):
+    if font and not os.path.isfile(font): #No font at all is fine, create_text falls back to Pillow's built-in one
         parser.error(f"unknown font {args.font!r}, see --list-fonts")
 
     def render(text):
@@ -486,142 +493,147 @@ def run_cli():
         printer.disconnect()
     return 1 if failed else 0
 
-if len(sys.argv) > 1: #Any command line arguments means CLI mode, no window
-    sys.exit(run_cli())
 #COMMAND LINE MODE ENDS HERE
 
 #GUI SETUP STARTS HERE
+def run_gui():
+    global root, textInputField, imageCanvas, fontPicker, radioJustification_status, radioFontSize_status #Widgets the callbacks above read
 
-root = tk.Tk()
-frame = Frame(root)
-frame.pack()
+    root = tk.Tk()
+    frame = Frame(root)
+    frame.pack()
 
-#Setting up window properties
-root.title("CTP500 Printer Control")
-root.configure() #Sets background color of the window. We will tweak this later to be able to select from printer colors and patterns
-root.minsize(520, 640) #Sets min size of the window
-root.geometry("520x640") #Changes original rendering position of the window
+    #Setting up window properties
+    root.title("CTP500 Printer Control")
+    root.configure() #Sets background color of the window. We will tweak this later to be able to select from printer colors and patterns
+    root.minsize(520, 640) #Sets min size of the window
+    root.geometry("520x640") #Changes original rendering position of the window
 
-#BLUETOOTH TOOLS SECTION STARTS HERE
-bluetoothFrame = Frame(root,
-                       borderwidth=1,
-                       padx=5,
-                       pady=5)
+    #BLUETOOTH TOOLS SECTION STARTS HERE
+    bluetoothFrame = Frame(root,
+                           borderwidth=1,
+                           padx=5,
+                           pady=5)
 
-bluetoothLabel = Label(bluetoothFrame, text = "Bluetooth tools")
-bluetoothLabel.pack(fill="x")
+    bluetoothLabel = Label(bluetoothFrame, text = "Bluetooth tools")
+    bluetoothLabel.pack(fill="x")
 
-#Setting up connection button
-connectButton = tk.Button(
-    bluetoothFrame,
-    text = "Connect",
-    command=connect_from_gui,
-    padx = 15,
-    pady = 15
-).pack(
-    side="left",
-    expand=1
-)
+    #Setting up connection button
+    connectButton = tk.Button(
+        bluetoothFrame,
+        text = "Connect",
+        command=connect_from_gui,
+        padx = 15,
+        pady = 15
+    ).pack(
+        side="left",
+        expand=1
+    )
 
-#Setting up disconnection button
-disconnectButton = tk.Button(
-    bluetoothFrame,
-    text = "Disconnect",
-    command=lambda: printer.disconnect(),
-    padx = 15,
-    pady = 15
-).pack(
-    side="left",
-    expand=1
-)
+    #Setting up disconnection button
+    disconnectButton = tk.Button(
+        bluetoothFrame,
+        text = "Disconnect",
+        command=lambda: printer.disconnect(),
+        padx = 15,
+        pady = 15
+    ).pack(
+        side="left",
+        expand=1
+    )
 
-bluetoothFrame.pack() #Rendering bluetoothFrame
-#BLUETOOTH TOOLS SECTION ENDS HERE
+    bluetoothFrame.pack() #Rendering bluetoothFrame
+    #BLUETOOTH TOOLS SECTION ENDS HERE
 
-#TEXT TOOLS SECTION STARTS HERE
-textFrame = Frame(root)
-radioButtonsFrame = Frame(textFrame)
+    #TEXT TOOLS SECTION STARTS HERE
+    textFrame = Frame(root)
+    radioButtonsFrame = Frame(textFrame)
 
-radioJustification_status = tk.IntVar() #Creating a watch state for the radio buttons for justification
+    radioJustification_status = tk.IntVar() #Creating a watch state for the radio buttons for justification
 
-textLabel = Label(textFrame, text="Text tools")
-textLabel.pack(fill="x") #Text label for the text input section
+    textLabel = Label(textFrame, text="Text tools")
+    textLabel.pack(fill="x") #Text label for the text input section
 
-for index in range(len(justification_options)): #Iterating through the list of justification options
-    Radiobutton(radioButtonsFrame,
-                text=justification_options[index],
-                variable=radioJustification_status,
-                value=index, padx=5).pack(side="left", expand=True) #Creating a button for each justification option
+    for index in range(len(justification_options)): #Iterating through the list of justification options
+        Radiobutton(radioButtonsFrame,
+                    text=justification_options[index],
+                    variable=radioJustification_status,
+                    value=index, padx=5).pack(side="left", expand=True) #Creating a button for each justification option
 
-radioButtonsFrame.pack(fill="x", pady=(0, 5)) #Rendering the frame for the Justification radio buttons
-#radioButtonsFrame.pack(fill="x", expand=1) #Rendering the frame for the Justification radio buttons
+    radioButtonsFrame.pack(fill="x", pady=(0, 5)) #Rendering the frame for the Justification radio buttons
+    #radioButtonsFrame.pack(fill="x", expand=1) #Rendering the frame for the Justification radio buttons
 
-#Font picker: only fonts that can actually print letters
-fontFrame = Frame(textFrame)
-Label(fontFrame, text="Font").pack(side="left")
-fontPicker = ttk.Combobox(fontFrame, values=sorted((name for name, path in system_fonts.items() if can_print_text(path)), key=str.lower), state="readonly")
-fontPicker.set(default_font)
-fontPicker.pack(side="left", fill="x", expand=True, padx=5)
+    #Font picker: only fonts that can actually print letters
+    fontFrame = Frame(textFrame)
+    Label(fontFrame, text="Font").pack(side="left")
+    fontPicker = ttk.Combobox(fontFrame, values=sorted((name for name, path in system_fonts.items() if can_print_text(path)), key=str.lower), state="readonly")
+    fontPicker.set(default_font)
+    fontPicker.pack(side="left", fill="x", expand=True, padx=5)
 
-radioFontSize_status = tk.IntVar(value=font_size_options["medium"]) #Creating a watch state for the font size radio buttons
-for name, size in font_size_options.items(): #Creating a button for each font size
-    Radiobutton(fontFrame, text=name, variable=radioFontSize_status, value=size, padx=5).pack(side="left")
-fontFrame.pack(fill="x", pady=(0, 5)) #Rendering the font picker row
+    radioFontSize_status = tk.IntVar(value=font_size_options["medium"]) #Creating a watch state for the font size radio buttons
+    for name, size in font_size_options.items(): #Creating a button for each font size
+        Radiobutton(fontFrame, text=name, variable=radioFontSize_status, value=size, padx=5).pack(side="left")
+    fontFrame.pack(fill="x", pady=(0, 5)) #Rendering the font picker row
 
-textInputField = scrolledtext.ScrolledText(textFrame, height=5, width=40) #Creating a text input widget to input text
-textInputField.pack(fill="both") #Rendering the text input widget
-textButton = Button(textFrame,
-                    text="Select a text file",
-                    padx=10, pady=15,
-                    command=selectTextFile)
-textButton.pack(expand=1, fill="x")
-textFrame.pack(fill="both") #Rendering the text input area frame
+    textInputField = scrolledtext.ScrolledText(textFrame, height=5, width=40) #Creating a text input widget to input text
+    textInputField.pack(fill="both") #Rendering the text input widget
+    textButton = Button(textFrame,
+                        text="Select a text file",
+                        padx=10, pady=15,
+                        command=selectTextFile)
+    textButton.pack(expand=1, fill="x")
+    textFrame.pack(fill="both") #Rendering the text input area frame
 
-#Creating a frame for the Print Text button
-# printTextFrame = Frame(textFrame)
-printTextButton = Button(textFrame,
-                         text="Print your text!",
+    #Creating a frame for the Print Text button
+    # printTextFrame = Frame(textFrame)
+    printTextButton = Button(textFrame,
+                             text="Print your text!",
+                             padx=10, pady=15,
+                             command=print_from_entry)
+    printTextButton.pack(fill="x", pady=(5, 0))
+    # printTextFrame.pack(side="bottom", expand=1, fill="x")
+    #TEXT TOOLS SECTION ENDS HERE
+
+    #IMAGE TOOLS SECTION STARTS HERE
+    #Creating a frame for the image selection area
+    imageFrame = Frame(root)
+    imageLabel = Label(imageFrame, text="Image tools").pack(fill="x", pady=(0,5))
+
+    #Creating a canvas to display the image selection
+    imageCanvas = tk.Canvas(imageFrame,
+                            width=300,
+                            height=100,
+                            bg = "white")
+    imageCanvas.pack(pady=(0,5)) #Rendering the image selection canvas
+
+    imageDisplay = Frame(imageFrame).pack(fill="both")  #Rendering the selected image to the image selection area
+
+    imageButton = Button(imageFrame,
+                         text="Select an image file",
                          padx=10, pady=15,
-                         command=print_from_entry)
-printTextButton.pack(fill="x", pady=(5, 0))
-# printTextFrame.pack(side="bottom", expand=1, fill="x")
-#TEXT TOOLS SECTION ENDS HERE
+                         command=selectImageFile)
+    imageButton.pack(fill="x")
+    #Displaying selected picture
 
-#IMAGE TOOLS SECTION STARTS HERE
-#Creating a frame for the image selection area
-imageFrame = Frame(root)
-imageLabel = Label(imageFrame, text="Image tools").pack(fill="x", pady=(0,5))
+    #Creating a frame for the Print Image button
+    #printImageFrame = Frame(imageFrame)
+    printImageButton = Button(imageFrame,
+                              text="Print your image!",
+                              padx=10, pady=15,
+                              command=print_from_image)
+    printImageButton.pack(fill="x", pady=(5, 0))
+    imageFrame.pack(fill="both", expand=True, padx=10, pady=5)
+    #IMAGE TOOLS SECTION ENDS HERE
 
-#Creating a canvas to display the image selection
-imageCanvas = tk.Canvas(imageFrame,
-                        width=300,
-                        height=100,
-                        bg = "white")
-imageCanvas.pack(pady=(0,5)) #Rendering the image selection canvas
+    def on_closing(): #Cleanup operations when closing the window
+        printer.disconnect() #Disconnecting the printer
+        root.destroy() #Flushing the UI
 
-imageDisplay = Frame(imageFrame).pack(fill="both")  #Rendering the selected image to the image selection area
+    root.protocol("WM_DELETE_WINDOW", on_closing) #Final window cleanup on app closing
 
-imageButton = Button(imageFrame,
-                     text="Select an image file",
-                     padx=10, pady=15,
-                     command=selectImageFile)
-imageButton.pack(fill="x")
-#Displaying selected picture
+    root.mainloop() #If your mainloop() runs before your options, then nothing will show up. Keep that in mind!
 
-#Creating a frame for the Print Image button
-#printImageFrame = Frame(imageFrame)
-printImageButton = Button(imageFrame,
-                          text="Print your image!",
-                          padx=10, pady=15,
-                          command=print_from_image)
-printImageButton.pack(fill="x", pady=(5, 0))
-imageFrame.pack(fill="both", expand=True, padx=10, pady=5)
-#IMAGE TOOLS SECTION ENDS HERE
-
-def on_closing(): #Cleanup operations when closing the window
-    printer.disconnect() #Disconnecting the printer
-    root.destroy() #Flushing the UI
-
-root.protocol("WM_DELETE_WINDOW", on_closing) #Final window cleanup on app closing
-
-root.mainloop() #If your mainloop() runs before your options, then nothing will show up. Keep that in mind!
+if __name__ == "__main__": #Only when run as a script, so tests can import this file without opening a window
+    if len(sys.argv) > 1: #Any command line arguments means CLI mode, no window
+        sys.exit(run_cli())
+    run_gui()
