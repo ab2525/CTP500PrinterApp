@@ -31,6 +31,21 @@ import PIL.ImageOps
 
 #COMMUNICATION LOGIC STARTS HERE
 mac_address = "00:00:00:00:00:00" #Put in your printer's Bluetooth device address here - you can find it in the app
+address_file = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), ".ctp500_printer_address") #Remembers the last printer that connected, so .exe users never need to edit this script
+
+def saved_address(): #The last printer that connected, or mac_address if there isn't one yet
+    try:
+        with open(address_file) as f:
+            return f.read().strip() or mac_address
+    except OSError:
+        return mac_address
+
+def remember_address(address):
+    try:
+        with open(address_file, "w") as f:
+            f.write(address)
+    except OSError as e: #Not being able to save it shouldn't stop us printing
+        print(f"Couldn't save the printer address: {e}")
 if sys.platform == "darwin": #macOS Python has no AF_BLUETOOTH, so we open the RFCOMM channel through Apple's IOBluetooth instead
     from Foundation import NSObject, NSRunLoop, NSDate #pip install pyobjc-framework-IOBluetooth
     from IOBluetooth import IOBluetoothDevice
@@ -105,6 +120,7 @@ class PrinterConnect: #Starting a PrinterConnect class to keep track of connecti
             print(f'Printer status: {status}') #Displaying status variable
 
             self.connected = True #Switching connection status for tracking
+            remember_address(mac_address)
             print("Connection established")
             return True #Returning status
 
@@ -312,8 +328,12 @@ def send_to_printer(img): #GUI printing: problems show up as popups
         return False
 
 def connect_from_gui(): #Connect button: problems show up as popups
+    address = addressEntry.get().strip()
+    if address in ("", "00:00:00:00:00:00"):
+        messagebox.showinfo("Printer address", "Type your printer's Bluetooth address (like 12:34:56:78:9A:BC) next to Connect first.")
+        return
     try:
-        printer.connect(mac_address)
+        printer.connect(address)
     except Exception as e:
         messagebox.showerror("Connection Error", f'Failed to connect with printer: {e}')
 
@@ -439,7 +459,7 @@ def run_cli():
     parser.add_argument("--font", default=default_font, help=f"font name from --list-fonts, or a font file path (default: {default_font})")
     parser.add_argument("--size", choices=font_size_options, default="medium", help="text size (default: medium)")
     parser.add_argument("--align", choices=justification_options, default="left", help="text alignment (default: left)")
-    parser.add_argument("--address", default=mac_address, help=f"printer Bluetooth address (default: {mac_address})")
+    parser.add_argument("--address", default=saved_address(), help=f"printer Bluetooth address (default: {saved_address()}, the last printer that connected)")
     parser.add_argument("--list-fonts", action="store_true", help="list the fonts that can print text, then exit")
     args = parser.parse_args()
 
@@ -497,7 +517,7 @@ def run_cli():
 
 #GUI SETUP STARTS HERE
 def run_gui():
-    global root, textInputField, imageCanvas, fontPicker, radioJustification_status, radioFontSize_status #Widgets the callbacks above read
+    global root, addressEntry, textInputField, imageCanvas, fontPicker, radioJustification_status, radioFontSize_status #Widgets the callbacks above read
 
     root = tk.Tk()
     frame = Frame(root)
@@ -517,6 +537,12 @@ def run_gui():
 
     bluetoothLabel = Label(bluetoothFrame, text = "Bluetooth tools")
     bluetoothLabel.pack(fill="x")
+
+    #Printer address field, filled in with the last printer that connected
+    Label(bluetoothFrame, text="Printer address").pack(side="left")
+    addressEntry = tk.Entry(bluetoothFrame, width=17)
+    addressEntry.insert(0, saved_address())
+    addressEntry.pack(side="left", padx=5)
 
     #Setting up connection button
     connectButton = tk.Button(

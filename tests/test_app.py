@@ -3,7 +3,9 @@
 Run from the repo root:  python -m unittest discover -s tests -v
 """
 import io
+import os
 import sys
+import tempfile
 import tkinter
 import unittest
 from unittest import mock
@@ -19,6 +21,14 @@ JOB_START = b"\x1b\x40" + b"\x1d\x49\xf0\x19"  # initialize + start print sequen
 RASTER = b"\x1d\x76\x30\x00"  # GS v 0: an image follows
 FEED = b"\x0a\x0a\x0a\x9a"  # end sequence, feeds the paper out
 WIDTH = app.printerWidth
+
+
+def setUpModule():  # keep the tests away from the real "last printer" file in your home folder
+    folder = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(folder.cleanup)
+    patcher = mock.patch.object(app, "address_file", os.path.join(folder.name, "printer_address"))
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
 
 
 class FakePrinter:
@@ -54,6 +64,8 @@ class FakePrinterTestCase(unittest.TestCase):
     def setUp(self):
         FakePrinter.connections = []
         self.addCleanup(setattr, FakePrinter, "refuse", False)  # don't leak "printer is off" into later tests
+        if os.path.exists(app.address_file):
+            os.remove(app.address_file)  # no remembered printer yet
         for name, value in (("open_connection", FakePrinter), ("sleep", lambda seconds: None), ("printer", app.PrinterConnect())):
             patcher = mock.patch.object(app, name, value)
             patcher.start()
@@ -145,6 +157,12 @@ class ConnectionTests(FakePrinterTestCase):
             app.printer.connect("AA:BB:CC:DD:EE:FF")
         self.assertFalse(app.printer.connected)
         self.assertIsNone(app.printer.socket)
+        self.assertEqual(app.saved_address(), app.mac_address)  # only printers that actually connected are remembered
+
+    def test_connecting_remembers_the_printer(self):
+        self.assertEqual(app.saved_address(), app.mac_address)
+        app.printer.connect("AA:BB:CC:DD:EE:FF")
+        self.assertEqual(app.saved_address(), "AA:BB:CC:DD:EE:FF")
 
     def test_disconnect_closes_the_connection(self):
         app.printer.connect("AA:BB:CC:DD:EE:FF")
@@ -178,6 +196,11 @@ class CliTests(FakePrinterTestCase):
         code, _, _ = self.cli("-", stdin="line one\nline two\nline three\n")
         self.assertEqual(code, 0)
         self.assertEqual(FakePrinter.connections[0].sent.count(RASTER), 1)
+
+    def test_defaults_to_the_last_printer_that_connected(self):
+        app.remember_address("11:22:33:44:55:66")
+        self.cli("hello")
+        self.assertEqual(FakePrinter.connections[0].address, "11:22:33:44:55:66")
 
     def test_size_align_and_address_options(self):
         code, _, _ = self.cli("--size", "large", "--align", "right", "--address", "11:22:33:44:55:66", "Hi")
@@ -264,9 +287,23 @@ class GuiTests(FakePrinterTestCase):
         self.assertTrue(all(app.can_print_text(app.system_fonts[name]) for name in fonts))
         self.assertEqual(app.fontPicker.get(), app.default_font)
 
+    def set_address(self, address):
+        app.addressEntry.delete(0, "end")
+        app.addressEntry.insert(0, address)
+
+    def test_connect_asks_for_an_address_first(self):
+        self.set_address(app.mac_address)  # still the 00:00:00:00:00:00 placeholder
+        with mock.patch.object(app.messagebox, "showinfo") as popup:
+            app.connect_from_gui()
+        popup.assert_called_once()
+        self.assertEqual(FakePrinter.connections, [])
+
     def test_connect_preview_and_print(self):
+        self.set_address("AA:BB:CC:DD:EE:FF")
         app.connect_from_gui()
         self.assertTrue(app.printer.connected)
+        self.assertEqual(FakePrinter.connections[0].address, "AA:BB:CC:DD:EE:FF")
+        self.assertEqual(app.saved_address(), "AA:BB:CC:DD:EE:FF")
 
         app.textInputField.insert("1.0", "Hello from the GUI")
         app.radioJustification_status.set(1)  # center
